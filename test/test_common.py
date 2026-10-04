@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-
+import os
 from patchcore import common
 
 
@@ -43,7 +43,6 @@ def test_search_without_index_raises_exception():
         nn_search.run(2, features)
     assert nn_search.run(2, features, features) is not None
 
-
 def test_read_write_index(tmpdir):
     index_filename = (tmpdir / "index").strpath
     nn_model = common.FaissNN()
@@ -57,12 +56,13 @@ def test_read_write_index(tmpdir):
     query_features = np.arange(10 * 6, dtype=np.float32).reshape(10, 6)
     assert loaded_nn_model.run(2, query_features) is not None
     assert np.all(
-        loaded_nn_model.run(2, query_features)[0] == nn_model.run(2, query_features)[0]
+        loaded_nn_model.run(2, query_features)[0]
+        == nn_model.run(2, query_features)[0]
     )
     assert np.all(
-        loaded_nn_model.run(2, query_features)[1] == nn_model.run(2, query_features)[1]
+        loaded_nn_model.run(2, query_features)[1]
+        == nn_model.run(2, query_features)[1]
     )
-
 
 def test_average_merger_shape():
     input_features = []
