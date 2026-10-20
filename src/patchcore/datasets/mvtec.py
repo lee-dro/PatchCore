@@ -87,6 +87,9 @@ class MVTecDataset(torch.utils.data.Dataset):
         self.transform_mask = transforms.Compose(self.transform_mask)
 
         self.imagesize = (3, imagesize, imagesize)
+        self.transform_mean = [0.485, 0.456, 0.406]
+        self.transform_std = [0.229, 0.224, 0.225]
+
 
     def __getitem__(self, idx):
         classname, anomaly, image_path, mask_path = self.data_to_iterate[idx]

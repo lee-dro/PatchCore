@@ -1,0 +1,37 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PatchCore - shared equal score fusion control",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/run_patchcore.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {"PYTHONPATH": "${workspaceFolder}/src"},
+            "args": [
+                "--gpu", "0",
+                "--seed", "0",
+                "--log_group", "EVAL20261020_score_shared_equal_bottle_s0",
+                "results", "patch_core",
+                "-b", "wideresnet50", "-b", "wideresnet50",
+                "-le", "0.layer2", "-le", "1.layer3",
+                "--image_fusion_weight", "0.5", "--image_fusion_weight", "0.5",
+                "--pixel_fusion_weight", "0.5", "--pixel_fusion_weight", "0.5",
+                "--pretrain_embed_dimension", "1024",
+                "--target_embed_dimension", "1024",
+                "--anomaly_scorer_num_nn", "1",
+                "--patchsize", "3",
+                "sampler",
+                "-p", "0.01",
+                "approx_greedy_coreset",
+                "dataset",
+                "--resize", "256",
+                "--imagesize", "224",
+                "-d", "bottle",
+                "mvtec",
+                "E:\\Datasets\\MVTecAD\\mvtec"
+            ]
+        }
+    ]
+}

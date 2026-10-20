@@ -61,17 +61,46 @@ def plot_segmentation_images(
             else:
                 mask = np.zeros_like(image)
 
-        savename = image_path.split("/")
-        savename = "_".join(savename[-save_depth:])
+        savename = os.path.normpath(image_path)
+        savename = os.path.basename(savename)
+        savename = os.path.splitext(savename)[0] + "_visualization.png"
         savename = os.path.join(savefolder, savename)
-        f, axes = plt.subplots(1, 2 + int(masks_provided))
+        '''f, axes = plt.subplots(1, 2 + int(masks_provided))
         axes[0].imshow(image.transpose(1, 2, 0))
         axes[1].imshow(mask.transpose(1, 2, 0))
         axes[2].imshow(segmentation)
         f.set_size_inches(3 * (2 + int(masks_provided)), 3)
         f.tight_layout()
         f.savefig(savename)
-        plt.close()
+        plt.close()'''
+        # 将图像转换成 H × W × C 的格式，便于 Matplotlib 显示
+        image_show = image.transpose(1, 2, 0)
+        mask_show = mask.transpose(1, 2, 0)# 异常得分图通常是 H × W 的二维数组
+        heatmap = np.asarray(segmentation).squeeze()# 创建四个可视化面板
+        f, axes = plt.subplots(1, 4, figsize=(12, 3))# 1. 原始图像
+        axes[0].imshow(image_show)
+        axes[0].set_title("Original Image")# 2. 数据集提供的真实异常标注
+        axes[1].imshow(mask_show)
+        axes[1].set_title("Ground Truth")# 3. PatchCore 预测的异常热力图
+        axes[2].imshow(heatmap, cmap="jet", vmin=0, vmax=1)
+        axes[2].set_title("Anomaly Heatmap")# 4. 把热力图叠加到原图上
+        axes[3].imshow(image_show)
+        axes[3].imshow(
+            heatmap,
+            cmap="jet",
+            alpha=0.4,
+            vmin=0,
+            vmax=1
+        )
+        axes[3].set_title("Overlay")# 隐藏坐标轴，整理布局
+        for ax in axes:
+            ax.axis("off")
+
+        f.tight_layout()
+        print("savefolder =", savefolder)
+        print("savename =", savename)
+        f.savefig(savename)
+        plt.close(f)
 
 
 def create_storage_folder(

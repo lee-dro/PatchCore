@@ -1,5 +1,6 @@
 import contextlib
 import gc
+import json
 import logging
 import os
 import sys
@@ -9,6 +10,7 @@ import numpy as np
 import torch
 
 import patchcore.common
+import patchcore.fusion
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
@@ -86,25 +88,14 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                 aggregator["scores"].append(scores)
                 aggregator["segmentations"].append(segmentations)
 
-            scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
-            scores = np.mean(scores, axis=0)
-
-            segmentations = np.array(aggregator["segmentations"])
-            min_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .min(axis=-1)
-                .reshape(-1, 1, 1, 1)
+            image_weights = [model.image_fusion_weight for model in PatchCore_list]
+            pixel_weights = [model.pixel_fusion_weight for model in PatchCore_list]
+            scores, _ = patchcore.fusion.fuse_predictions(
+                aggregator["scores"], image_weights
             )
-            max_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .max(axis=-1)
-                .reshape(-1, 1, 1, 1)
+            segmentations, _ = patchcore.fusion.fuse_predictions(
+                aggregator["segmentations"], pixel_weights
             )
-            segmentations = (segmentations - min_scores) / (max_scores - min_scores)
-            segmentations = np.mean(segmentations, axis=0)
 
             anomaly_labels = [
                 x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
@@ -230,6 +221,24 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
                     )
                     loaded_patchcores.append(patchcore_instance)
 
+            config_path = os.path.join(patch_core_path, "fusion.json")
+            config = None
+            if os.path.exists(config_path):
+                with open(config_path, encoding="utf-8") as handle:
+                    config = json.load(handle)
+            image_weights, pixel_weights = patchcore.fusion.restore_task_weights(
+                config, len(loaded_patchcores)
+            )
+            for model, image_weight, pixel_weight in zip(
+                loaded_patchcores, image_weights, pixel_weights
+            ):
+                model.image_fusion_weight = float(image_weight)
+                model.pixel_fusion_weight = float(pixel_weight)
+            LOGGER.debug(
+                "[Fusion] loaded image_weights=%s pixel_weights=%s; evaluation-set min-max",
+                image_weights.tolist(),
+                pixel_weights.tolist(),
+            )
             yield loaded_patchcores
 
     return ("get_patchcore_iter", [get_patchcore_iter, len(patch_core_paths)])

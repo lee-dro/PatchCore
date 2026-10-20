@@ -1,7 +1,9 @@
 import contextlib
+import json
 import logging
 import os
 import sys
+import time
 
 import click
 import numpy as np
@@ -9,6 +11,7 @@ import torch
 
 import patchcore.backbones
 import patchcore.common
+import patchcore.fusion
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
@@ -82,6 +85,9 @@ def run(
                 device,
             )
             PatchCore_list = methods["get_patchcore"](imagesize, sampler, device)
+            image_weights = [model.image_fusion_weight for model in PatchCore_list]
+            pixel_weights = [model.pixel_fusion_weight for model in PatchCore_list]
+            branch_records = []
             if len(PatchCore_list) > 1:
                 LOGGER.info(
                     "Utilizing PatchCore Ensemble (N={}).".format(len(PatchCore_list))
@@ -94,7 +100,32 @@ def run(
                     "Training models ({}/{})".format(i + 1, len(PatchCore_list))
                 )
                 torch.cuda.empty_cache()
+                LOGGER.debug(
+                    "[Fusion] branch=%d layers=%s image_weight=%.6f pixel_weight=%.6f",
+                    i,
+                    PatchCore.layers_to_extract_from,
+                    image_weights[i],
+                    pixel_weights[i],
+                )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                started = time.perf_counter()
                 PatchCore.fit(dataloaders["training"])
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                elapsed = time.perf_counter() - started
+                bank_shape = list(PatchCore.anomaly_scorer.detection_features.shape)
+                branch_records.append(
+                    {
+                        "backbone": PatchCore.backbone.name,
+                        "layers": list(PatchCore.layers_to_extract_from),
+                        "image_weight": image_weights[i],
+                        "pixel_weight": pixel_weights[i],
+                        "fit_time_s": elapsed,
+                        "memory_bank_shape": bank_shape,
+                    }
+                )
+                LOGGER.info("Fit time: %.2f seconds", elapsed)
 
             torch.cuda.empty_cache()
             aggregator = {"scores": [], "segmentations": []}
@@ -105,31 +136,53 @@ def run(
                         i + 1, len(PatchCore_list)
                     )
                 )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                started = time.perf_counter()
                 scores, segmentations, labels_gt, masks_gt = PatchCore.predict(
                     dataloaders["testing"]
                 )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                elapsed = time.perf_counter() - started
+                branch_records[i]["predict_time_s"] = elapsed
+                LOGGER.info("Predict time: %.2f seconds", elapsed)
                 aggregator["scores"].append(scores)
                 aggregator["segmentations"].append(segmentations)
 
-            scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
-            scores = np.mean(scores, axis=0)
-
-            segmentations = np.array(aggregator["segmentations"])
-            min_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .min(axis=-1)
-                .reshape(-1, 1, 1, 1)
+            started = time.perf_counter()
+            scores, score_bounds = patchcore.fusion.fuse_predictions(
+                aggregator["scores"], image_weights
             )
-            max_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .max(axis=-1)
-                .reshape(-1, 1, 1, 1)
+            segmentations, map_bounds = patchcore.fusion.fuse_predictions(
+                aggregator["segmentations"], pixel_weights
             )
-            segmentations = (segmentations - min_scores) / (max_scores - min_scores)
-            segmentations = np.mean(segmentations, axis=0)
+            fusion_time = time.perf_counter() - started
+            fit_time = sum(row["fit_time_s"] for row in branch_records)
+            predict_time = (
+                sum(row["predict_time_s"] for row in branch_records) + fusion_time
+            )
+            fusion_config = {
+                "version": 2,
+                "dataset": dataset_name,
+                "seed": seed,
+                "image_weights": image_weights,
+                "pixel_weights": pixel_weights,
+                "branches": branch_records,
+                "normalization": "evaluation_set_minmax",
+                "score_bounds": score_bounds,
+                "map_bounds": map_bounds,
+                "fit_time_s": fit_time,
+                "predict_time_s": predict_time,
+                "fusion_time_s": fusion_time,
+                "command": sys.argv,
+            }
+            with open(
+                os.path.join(run_save_path, dataset_name + "_fusion.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(fusion_config, handle, indent=2)
 
             anomaly_labels = [
                 x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
@@ -215,6 +268,12 @@ def run(
                     run_save_path, "models", dataset_name
                 )
                 os.makedirs(patchcore_save_path, exist_ok=True)
+                with open(
+                    os.path.join(patchcore_save_path, "fusion.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    json.dump(fusion_config, handle, indent=2)
                 for i, PatchCore in enumerate(PatchCore_list):
                     prepend = (
                         "Ensemble-{}-{}_".format(i + 1, len(PatchCore_list))
@@ -241,6 +300,24 @@ def run(
 # Pretraining-specific parameters.
 @click.option("--backbone_names", "-b", type=str, multiple=True, default=[])
 @click.option("--layers_to_extract_from", "-le", type=str, multiple=True, default=[])
+@click.option(
+    "--fusion_weight",
+    type=float,
+    multiple=True,
+    help="One non-negative weight per backbone; default: equal weights.",
+)
+@click.option(
+    "--image_fusion_weight",
+    type=float,
+    multiple=True,
+    help="Image-score weights in backbone order; overrides --fusion_weight for images.",
+)
+@click.option(
+    "--pixel_fusion_weight",
+    type=float,
+    multiple=True,
+    help="Anomaly-map weights in backbone order; overrides --fusion_weight for pixels.",
+)
 # Parameters for Glue-code (to merge different parts of the pipeline.
 @click.option("--pretrain_embed_dimension", type=int, default=1024)
 @click.option("--target_embed_dimension", type=int, default=1024)
@@ -259,6 +336,9 @@ def run(
 def patch_core(
     backbone_names,
     layers_to_extract_from,
+    fusion_weight,
+    image_fusion_weight,
+    pixel_fusion_weight,
     pretrain_embed_dimension,
     target_embed_dimension,
     preprocessing,
@@ -272,19 +352,46 @@ def patch_core(
     faiss_num_workers,
 ):
     backbone_names = list(backbone_names)
+    try:
+        image_weights, pixel_weights = patchcore.fusion.resolve_task_weights(
+            len(backbone_names),
+            shared=fusion_weight,
+            image=image_fusion_weight,
+            pixel=pixel_fusion_weight,
+        )
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
     if len(backbone_names) > 1:
         layers_to_extract_from_coll = [[] for _ in range(len(backbone_names))]
         for layer in layers_to_extract_from:
-            idx = int(layer.split(".")[0])
+            try:
+                idx = int(layer.split(".")[0])
+            except ValueError as error:
+                raise click.BadParameter(
+                    "Use indexed layers, e.g. 0.layer2 and 1.layer3.", param_hint="-le"
+                ) from error
+            if idx < 0 or idx >= len(backbone_names) or "." not in layer:
+                raise click.BadParameter(
+                    "Layer index must match a backbone.", param_hint="-le"
+                )
             layer = ".".join(layer.split(".")[1:])
+            if not layer:
+                raise click.BadParameter(
+                    "Layer name cannot be empty.", param_hint="-le"
+                )
             layers_to_extract_from_coll[idx].append(layer)
     else:
         layers_to_extract_from_coll = [layers_to_extract_from]
 
+    if any(not layers for layers in layers_to_extract_from_coll):
+        raise click.BadParameter(
+            "Each backbone needs at least one layer.", param_hint="-le"
+        )
+
     def get_patchcore(input_shape, sampler, device):
         loaded_patchcores = []
-        for backbone_name, layers_to_extract_from in zip(
-            backbone_names, layers_to_extract_from_coll
+        for backbone_name, layers_to_extract_from, image_weight, pixel_weight in zip(
+            backbone_names, layers_to_extract_from_coll, image_weights, pixel_weights
         ):
             backbone_seed = None
             if ".seed-" in backbone_name:
@@ -306,9 +413,11 @@ def patch_core(
                 target_embed_dimension=target_embed_dimension,
                 patchsize=patchsize,
                 featuresampler=sampler,
-                anomaly_scorer_num_nn=anomaly_scorer_num_nn,
+                anomaly_score_num_nn=anomaly_scorer_num_nn,
                 nn_method=nn_method,
             )
+            patchcore_instance.image_fusion_weight = float(image_weight)
+            patchcore_instance.pixel_fusion_weight = float(pixel_weight)
             loaded_patchcores.append(patchcore_instance)
         return loaded_patchcores
 
