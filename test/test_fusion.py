@@ -7,11 +7,180 @@ import pytest
 from click.testing import CliRunner
 
 from patchcore.fusion import (
+    adaptive_task_weights,
     fuse_predictions,
     normalize_weights,
     resolve_task_weights,
     restore_task_weights,
+    sensitivity_gate,
+    shrink_weights,
 )
+
+
+def test_adaptive_task_weights_follow_clean_stability_and_synthetic_sensitivity():
+    rng = np.random.RandomState(0)
+    clean_scores = np.asarray([0.01 * rng.normal(size=8), 0.5 * rng.normal(size=8)])
+    synthetic_scores = clean_scores + np.asarray([[1.0], [0.1]])
+    clean_maps = np.asarray(
+        [0.01 * rng.normal(size=(8, 4, 4)), 0.5 * rng.normal(size=(8, 4, 4))]
+    )
+    synthetic_maps = clean_maps.copy()
+    masks = np.zeros((8, 4, 4), dtype=float)
+    masks[:, 1:3, 1:3] = 1.0
+    synthetic_maps += masks[None] * np.asarray([[[[1.0]]], [[[0.1]]]])
+
+    image_weights, pixel_weights, diagnostics = adaptive_task_weights(
+        clean_scores,
+        synthetic_scores,
+        clean_maps,
+        synthetic_maps,
+        masks,
+    )
+
+    assert image_weights[0] > image_weights[1]
+    assert pixel_weights[0] > pixel_weights[1]
+    assert diagnostics["method"] == "clean_dispersion_plus_synthetic_suite_combined"
+    np.testing.assert_allclose(image_weights.sum(), 1.0)
+    np.testing.assert_allclose(pixel_weights.sum(), 1.0)
+
+
+def test_sensitivity_aux_zero_penalty_matches_sensitivity_only():
+    rng = np.random.RandomState(1)
+    clean_scores = np.asarray([0.05 * rng.normal(size=10), 0.25 * rng.normal(size=10)])
+    synthetic_scores = clean_scores + np.asarray([[0.8], [0.3]])
+    clean_maps = np.asarray(
+        [0.05 * rng.normal(size=(10, 4, 4)), 0.25 * rng.normal(size=(10, 4, 4))]
+    )
+    synthetic_maps = clean_maps.copy()
+    masks = np.zeros((10, 4, 4), dtype=float)
+    masks[:, 1:3, 1:3] = 1.0
+    synthetic_maps += masks[None] * np.asarray([[[[0.8]]], [[[0.3]]]])
+    groups = ["spot"] * 10
+
+    sensitivity = adaptive_task_weights(
+        clean_scores,
+        synthetic_scores,
+        clean_maps,
+        synthetic_maps,
+        masks,
+        groups,
+        strategy="sensitivity",
+    )
+    sensitivity_aux = adaptive_task_weights(
+        clean_scores,
+        synthetic_scores,
+        clean_maps,
+        synthetic_maps,
+        masks,
+        groups,
+        strategy="sensitivity_aux",
+        stability_penalty=0.0,
+    )
+
+    np.testing.assert_allclose(sensitivity_aux[0], sensitivity[0])
+    np.testing.assert_allclose(sensitivity_aux[1], sensitivity[1])
+    assert sensitivity_aux[2]["stability_penalty"] == 0.0
+
+
+def test_sensitivity_aux_penalty_reduces_weight_of_more_volatile_branch():
+    rng = np.random.RandomState(2)
+    clean_scores = np.asarray([0.05 * rng.normal(size=12), 0.5 * rng.normal(size=12)])
+    synthetic_scores = clean_scores + np.asarray([[0.5], [0.5]])
+    clean_maps = np.asarray(
+        [0.05 * rng.normal(size=(12, 4, 4)), 0.5 * rng.normal(size=(12, 4, 4))]
+    )
+    synthetic_maps = clean_maps.copy()
+    masks = np.zeros((12, 4, 4), dtype=float)
+    masks[:, 1:3, 1:3] = 1.0
+    synthetic_maps += masks[None] * np.asarray([[[[0.5]]], [[[0.5]]]])
+    groups = ["spot"] * 12
+
+    no_penalty = adaptive_task_weights(
+        clean_scores,
+        synthetic_scores,
+        clean_maps,
+        synthetic_maps,
+        masks,
+        groups,
+        strategy="sensitivity_aux",
+        stability_penalty=0.0,
+    )
+    with_penalty = adaptive_task_weights(
+        clean_scores,
+        synthetic_scores,
+        clean_maps,
+        synthetic_maps,
+        masks,
+        groups,
+        strategy="sensitivity_aux",
+        stability_penalty=0.25,
+    )
+
+    assert with_penalty[0][0] > no_penalty[0][0]
+    assert with_penalty[1][0] > no_penalty[1][0]
+    assert with_penalty[2]["stability_penalty"] == 0.25
+
+
+def test_shrink_weights_interpolates_between_base_and_sensitivity_weights():
+    base = np.asarray([0.5, 0.5])
+    sensitivity = np.asarray([0.8, 0.2])
+
+    np.testing.assert_allclose(shrink_weights(base, sensitivity, 0.0), base)
+    np.testing.assert_allclose(shrink_weights(base, sensitivity, 1.0), sensitivity)
+    np.testing.assert_allclose(
+        shrink_weights(base, sensitivity, 0.25), np.asarray([0.575, 0.425])
+    )
+
+
+def test_shrink_weights_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        shrink_weights(np.asarray([0.5, 0.5]), np.asarray([0.8, 0.2]), 1.1)
+    with pytest.raises(ValueError, match="sum to 1"):
+        shrink_weights(np.asarray([0.4, 0.4]), np.asarray([0.8, 0.2]), 0.25)
+
+
+def test_sensitivity_gate_requires_calibration_safety_checks():
+    diagnostics = {
+        "pixel": {
+            "sensitivity_by_group": {
+                "spot": [2.0, 1.0],
+                "scratch": [1.8, 1.0],
+            },
+            "weights": [0.7, 0.3],
+            "relative_stability": [0.7, 1.0],
+        }
+    }
+    result = sensitivity_gate(diagnostics)
+    assert result["use_shrinkage"] is True
+    assert result["group_consistency_ok"] is True
+
+    diagnostics["pixel"]["weights"] = [0.9, 0.1]
+    result = sensitivity_gate(diagnostics)
+    assert result["use_shrinkage"] is False
+
+
+def test_conservative_sensitivity_gate_requires_margin_confidence():
+    diagnostics = {
+        "pixel": {
+            "sensitivity_by_group": {
+                "spot": [5.0, 1.0],
+                "scratch": [4.0, 1.0],
+                "texture": [3.0, 1.0],
+            },
+            "weights": [0.7, 0.3],
+            "relative_stability": [0.4, 1.0],
+        }
+    }
+    result = sensitivity_gate(diagnostics, mode="conservative")
+    assert result["use_shrinkage"] is True
+    assert result["margin_consistency"] == 1.0
+    assert result["margin_confidence_ok"] is True
+
+    diagnostics["pixel"]["sensitivity_by_group"]["texture"] = [1.0, 5.0]
+    result = sensitivity_gate(diagnostics, mode="conservative")
+    assert result["use_shrinkage"] is False
+    assert result["layer2_weight_ok"] is True
+    assert result["margin_consistency_ok"] is False
 
 
 def load_script(name):
@@ -57,33 +226,21 @@ def test_bad_weights(weights):
         normalize_weights(weights, 2)
 
 
-@pytest.mark.parametrize(
-    "image_weights,pixel_weights",
-    [
-        ((0.9, 0.1), (0.5, 0.5)),
-        ((0.7, 0.3), (0.3, 0.7)),
-        ((1.0, 0.0), (0.0, 1.0)),
-    ],
-)
-def test_launch_cli_constructs_independent_branches(
-    monkeypatch, tmp_path, image_weights, pixel_weights
-):
+def test_launch_cli_constructs_independent_layer_branches(monkeypatch, tmp_path):
     run = load_script("run_patchcore")
     config = json.loads(
         (Path(__file__).resolve().parents[1] / ".vscode/launch.json").read_text()
     )
     assert len(config["configurations"]) == 1
     args = list(config["configurations"][0]["args"])
-    # Exercise editable weights without relying on the user's current values
-    # or requiring their dataset path to exist on another developer's computer.
-    for option, weights in [
-        ("--image_fusion_weight", image_weights),
-        ("--pixel_fusion_weight", pixel_weights),
-    ]:
-        positions = [i + 1 for i, value in enumerate(args) if value == option]
-        assert len(positions) == 2
-        for position, weight in zip(positions, weights):
-            args[position] = str(weight)
+    assert args.count("-b") == 2
+    assert args[args.index("-b") + 1] == "wideresnet50"
+    assert args.count("-le") == 2
+    assert args[args.index("-le") + 1] == "0.layer2"
+    assert args[args.index("-le", args.index("-le") + 1) + 1] == "1.layer3"
+    assert args.count("-d") == 1
+    assert "--layer_fusion_weight" not in args
+    assert "--task_decoupled_ablation" in args
     args[-1] = str(tmp_path)
     args[args.index("--anomaly_scorer_num_nn") + 1] = "3"
     captured = {}
@@ -113,17 +270,13 @@ def test_launch_cli_constructs_independent_branches(
     assert result.exit_code == 0, result.output
     models = captured["models"]
     assert len(models) == 2
-    assert models[0].configuration["layers_to_extract_from"] == ["layer2"]
-    assert models[1].configuration["layers_to_extract_from"] == ["layer3"]
-    assert (
-        models[0].configuration["backbone"] is not models[1].configuration["backbone"]
-    )
-    np.testing.assert_allclose(
-        [model.image_fusion_weight for model in models], image_weights
-    )
-    np.testing.assert_allclose(
-        [model.pixel_fusion_weight for model in models], pixel_weights
-    )
+    assert [list(m.configuration["layers_to_extract_from"]) for m in models] == [
+        ["layer2"],
+        ["layer3"],
+    ]
+    assert all(m.configuration["layer_fusion_weights"] is None for m in models)
+    np.testing.assert_allclose([m.image_fusion_weight for m in models], [0.9, 0.1])
+    np.testing.assert_allclose([m.pixel_fusion_weight for m in models], [0.5, 0.5])
     assert all(model.configuration["anomaly_score_num_nn"] == 3 for model in models)
 
 

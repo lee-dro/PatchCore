@@ -1,3 +1,8 @@
 .idea/
 __pycache__/
 LabletAnomaly.egg-info/
+.pytest_cache/
+results/**/run.log
+results/**/models/
+results/**/segmentation_images/
+results/**/*.inspect.ndjson

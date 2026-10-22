@@ -35,11 +35,32 @@ class PatchCore(torch.nn.Module):
         anomaly_score_num_nn=1,
         featuresampler=patchcore.sampler.IdentitySampler(),
         nn_method=patchcore.common.FaissNN(False, 4),
+        layer_fusion_weights=None,
         **kwargs,
     ):
         self.backbone = backbone.to(device)
         self.layers_to_extract_from = layers_to_extract_from
         self.input_shape = input_shape
+
+        if layer_fusion_weights is None:
+            self.layer_fusion_weights = None
+        else:
+            layer_fusion_weights = np.asarray(layer_fusion_weights, dtype=np.float64)
+            if layer_fusion_weights.shape != (len(layers_to_extract_from),):
+                raise ValueError(
+                    "layer_fusion_weights must contain one value per extracted layer."
+                )
+            if (
+                not np.isfinite(layer_fusion_weights).all()
+                or np.any(layer_fusion_weights < 0)
+                or layer_fusion_weights.sum() <= 0
+            ):
+                raise ValueError(
+                    "layer_fusion_weights must be finite, non-negative, and non-zero."
+                )
+            self.layer_fusion_weights = (
+                layer_fusion_weights / layer_fusion_weights.sum()
+            ).tolist()
 
         self.device = device
         self.patch_maker = PatchMaker(patchsize, stride=patchstride)#PatchMaker负责把特征图切成局部 Patch，以及将 Patch 级异常分数重新组织起来。
@@ -139,6 +160,19 @@ class PatchCore(torch.nn.Module):
         # As different feature backbones & patching provide differently
         # sized features, these are brought into the correct form here.
         features = self.forward_modules["preprocessing"](features)
+        if self.layer_fusion_weights is not None:
+            layer_weights = torch.as_tensor(
+                self.layer_fusion_weights,
+                dtype=features.dtype,
+                device=features.device,
+            )
+            # Aggregator averages over all layer dimensions. Multiplying by
+            # the number of layers converts that average into an explicit
+            # weighted average while keeping equal weights identical to the
+            # original implementation.
+            features = features * (
+                layer_weights * features.shape[1]
+            ).reshape(1, -1, 1)
         features = self.forward_modules["preadapt_aggregator"](features)
 
         if provide_patch_shapes:#如果提供 patch 网格尺寸，则返回处理后的特征图和 patch 网格尺寸。
@@ -246,6 +280,7 @@ class PatchCore(torch.nn.Module):
         patchcore_params = {#用 pickle 保存 PatchCore 的超参配置字典
             "backbone.name": self.backbone.name,
             "layers_to_extract_from": self.layers_to_extract_from,
+            "layer_fusion_weights": self.layer_fusion_weights,
             "input_shape": self.input_shape,
             "pretrain_embed_dimension": self.forward_modules[
                 "preprocessing"

@@ -1,0 +1,42 @@
+{
+  "categories": [
+    "bottle",
+    "pill",
+    "transistor"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "train_fraction": 0.8,
+  "normalization": "evaluation_set_minmax",
+  "adaptive_samples": 64,
+  "shrinkage": 0.25,
+  "gate_mode": "legacy",
+  "gate_thresholds": [
+    0.8,
+    0.8,
+    0.9
+  ],
+  "num_workers": 0,
+  "batch_size": 2,
+  "note": "New frozen protocol; historical exact split settings unavailable.",
+  "sources_sha256": {
+    "src\\patchcore\\__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src\\patchcore\\backbones.py": "8a428376704566249cb87d64502a1bfd4b33f2f5e59d46e9b39bb34fadc92219",
+    "src\\patchcore\\common.py": "8fd1dbf86c7634c005161edeea435b8c6777476d74db98a86bc80b63f3a47551",
+    "src\\patchcore\\datasets\\__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src\\patchcore\\datasets\\mvtec.py": "52b6382b69bb9df48c65c88f3f51de56bfda8be66c980ecdd5d6856959842de8",
+    "src\\patchcore\\fusion.py": "71c4b9f6b34bb3f05294ee28d3df0bdc5f2f575841b306a6ad2a4f6996f0330e",
+    "src\\patchcore\\metrics.py": "bb74f4fb790319199ab14ec222dc449788e9d45b4f9ee362548158f26b2e3238",
+    "src\\patchcore\\networks\\__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src\\patchcore\\patchcore.py": "2494998ecfffe2b185e95cb1ac92ff2efa1dd889d1d79eec63d4c55c69141bc6",
+    "src\\patchcore\\sampler.py": "04b1e7b2fa64ce17a7718f7d20e026b7384c7486ef99807dd8451ec9340ea799",
+    "src\\patchcore\\utils.py": "95b7a70dd505cc79cd77976fcc082b74ce7690b799a13e6af9108ae55d641dca",
+    "bin\\run_patchcore.py": "5fe3a3816aad8fda2cfdd198252a4dbe4f895347394e0d26ed8c7e4b0d10aa56",
+    "bin\\benchmark_fusion.py": "0f5ee1da431bbbaeedad7b545cd41f3bd5814771cc3d979cde699a3dd893bea0"
+  }
+}

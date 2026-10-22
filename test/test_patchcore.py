@@ -135,6 +135,25 @@ def test_patchcore_load_and_saveing(tmpdir):
         assert np.all(mask == other_mask)
 
 
+def test_patchcore_layer_fusion_weights_are_normalized():
+    image_dimension = 112
+    model = patchcore_model.PatchCore(torch.device("cpu"))
+    backbone = models.wide_resnet50_2(pretrained=False)
+    backbone.name, backbone.seed = "wideresnet50", 0
+    model.load(
+        backbone=backbone,
+        layers_to_extract_from=["layer2", "layer3"],
+        device=torch.device("cpu"),
+        input_shape=[3, image_dimension, image_dimension],
+        pretrain_embed_dimension=1024,
+        target_embed_dimension=1024,
+        patchsize=3,
+        anomaly_score_num_nn=1,
+        layer_fusion_weights=[7.0, 3.0],
+    )
+    np.testing.assert_allclose(model.layer_fusion_weights, [0.7, 0.3])
+
+
 def test_patchcore_real_data():
     image_dimension = 112
     sampling_percentage = 0.1

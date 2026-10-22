@@ -1,0 +1,5 @@
+﻿comparison,metric,mean_delta,std_delta,wins,ties,losses
+shrinkage_minus_fixed,full_pixel_auroc,0.00017586216736002432,0.0022133930411018985,49,0,26
+shrinkage_minus_fixed,anomaly_pixel_auroc,0.00031076184761771023,0.0025156895526704153,50,0,25
+gate_minus_fixed,full_pixel_auroc,0.0003882611530277661,0.001113017451660393,34,29,12
+gate_minus_fixed,anomaly_pixel_auroc,0.0005013182565502664,0.001259627550942008,35,29,11

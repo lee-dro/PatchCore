@@ -33,9 +33,11 @@ def plot_segmentation_images(
         mask_transform: [function or lambda] Optional transformation of masks.
         save_depth: [int] Number of path-strings to use for image savenames.
     """
+    if not len(image_paths):
+        return
+    masks_provided = mask_paths is not None
     if mask_paths is None:
-        mask_paths = ["-1" for _ in range(len(image_paths))]
-    masks_provided = mask_paths[0] != "-1"
+        mask_paths = [None for _ in image_paths]
     if anomaly_scores is None:
         anomaly_scores = ["-1" for _ in range(len(image_paths))]
 
@@ -49,56 +51,42 @@ def plot_segmentation_images(
     ):
         image = PIL.Image.open(image_path).convert("RGB")
         image = image_transform(image)
-        if not isinstance(image, np.ndarray):
-            image = image.numpy()
+        image = np.asarray(image)
+        image_show = image.transpose(1, 2, 0) if image.shape[0] in (1, 3) else image
+        mask = np.zeros(image_show.shape[:2])
 
         if masks_provided:
             if mask_path is not None:
                 mask = PIL.Image.open(mask_path).convert("RGB")
                 mask = mask_transform(mask)
-                if not isinstance(mask, np.ndarray):
-                    mask = mask.numpy()
-            else:
-                mask = np.zeros_like(image)
+                mask = np.asarray(mask)
 
         savename = os.path.normpath(image_path)
-        savename = os.path.basename(savename)
+        savename = "_".join(savename.split(os.sep)[-save_depth:])
         savename = os.path.splitext(savename)[0] + "_visualization.png"
         savename = os.path.join(savefolder, savename)
-        '''f, axes = plt.subplots(1, 2 + int(masks_provided))
-        axes[0].imshow(image.transpose(1, 2, 0))
-        axes[1].imshow(mask.transpose(1, 2, 0))
-        axes[2].imshow(segmentation)
-        f.set_size_inches(3 * (2 + int(masks_provided)), 3)
-        f.tight_layout()
-        f.savefig(savename)
-        plt.close()'''
-        # 将图像转换成 H × W × C 的格式，便于 Matplotlib 显示
-        image_show = image.transpose(1, 2, 0)
-        mask_show = mask.transpose(1, 2, 0)# 异常得分图通常是 H × W 的二维数组
-        heatmap = np.asarray(segmentation).squeeze()# 创建四个可视化面板
-        f, axes = plt.subplots(1, 4, figsize=(12, 3))# 1. 原始图像
-        axes[0].imshow(image_show)
-        axes[0].set_title("Original Image")# 2. 数据集提供的真实异常标注
-        axes[1].imshow(mask_show)
-        axes[1].set_title("Ground Truth")# 3. PatchCore 预测的异常热力图
-        axes[2].imshow(heatmap, cmap="jet", vmin=0, vmax=1)
-        axes[2].set_title("Anomaly Heatmap")# 4. 把热力图叠加到原图上
-        axes[3].imshow(image_show)
-        axes[3].imshow(
-            heatmap,
-            cmap="jet",
-            alpha=0.4,
-            vmin=0,
-            vmax=1
+        mask_show = (
+            mask.transpose(1, 2, 0)
+            if mask.ndim == 3 and mask.shape[0] in (1, 3)
+            else mask
         )
-        axes[3].set_title("Overlay")# 隐藏坐标轴，整理布局
+        mask_show = mask_show.squeeze()
+        heatmap = np.asarray(segmentation).squeeze()  # 创建四个可视化面板
+        f, axes = plt.subplots(1, 4, figsize=(12, 3))  # 1. 原始图像
+        axes[0].imshow(image_show)
+        axes[0].set_title("Original Image")  # 2. 数据集提供的真实异常标注
+        axes[1].imshow(mask_show)
+        axes[1].set_title("Ground Truth")  # 3. PatchCore 预测的异常热力图
+        axes[2].imshow(heatmap, cmap="jet", vmin=0, vmax=1)
+        axes[2].set_title("Anomaly Heatmap")  # 4. 把热力图叠加到原图上
+        axes[3].imshow(image_show)
+        axes[3].imshow(heatmap, cmap="jet", alpha=0.4, vmin=0, vmax=1)
+        axes[3].set_title("Overlay")  # 隐藏坐标轴，整理布局
         for ax in axes:
             ax.axis("off")
 
         f.tight_layout()
-        print("savefolder =", savefolder)
-        print("savename =", savename)
+        LOGGER.debug("Saving segmentation: %s", savename)
         f.savefig(savename)
         plt.close(f)
 
@@ -164,6 +152,7 @@ def compute_and_store_final_results(
         "Anomaly Pixel AUROC",
         "Anomaly PRO",
     ],
+    row_groups=None,
 ):
     """Store computed results as CSV file.
 
@@ -177,13 +166,21 @@ def compute_and_store_final_results(
     if row_names is not None:
         assert len(row_names) == len(results), "#Rownames != #Result-rows."
 
-    mean_metrics = {}
-    for i, result_key in enumerate(column_names):
-        mean_metrics[result_key] = np.mean([x[i] for x in results])
-        LOGGER.info("{0}: {1:3.3f}".format(result_key, mean_metrics[result_key]))
+    if row_groups is None:
+        row_groups = ["all"] * len(results)
+    if len(row_groups) != len(results):
+        raise ValueError("Each result requires one method group.")
+    group_names = list(dict.fromkeys(row_groups))
+    group_means = {}
+    for group in group_names:
+        selected = [row for row, label in zip(results, row_groups) if label == group]
+        group_means[group] = np.mean(selected, axis=0).tolist()
+        for key, value in zip(column_names, group_means[group]):
+            prefix = "" if len(group_names) == 1 else f"[{group}] "
+            LOGGER.info("%s%s: %.3f", prefix, key, value)
 
     savename = os.path.join(results_path, "results.csv")
-    with open(savename, "w") as csv_file:
+    with open(savename, "w", newline="", encoding="utf-8") as csv_file:
         csv_writer = csv.writer(csv_file, delimiter=",")
         header = column_names
         if row_names is not None:
@@ -195,10 +192,13 @@ def compute_and_store_final_results(
             if row_names is not None:
                 csv_row = [row_names[i]] + result_list
             csv_writer.writerow(csv_row)
-        mean_scores = list(mean_metrics.values())
-        if row_names is not None:
-            mean_scores = ["Mean"] + mean_scores
-        csv_writer.writerow(mean_scores)
+        for group, means in group_means.items():
+            label = "Mean" if len(group_names) == 1 else f"Mean__{group}"
+            csv_writer.writerow(([label] if row_names is not None else []) + means)
 
-    mean_metrics = {"mean_{0}".format(key): item for key, item in mean_metrics.items()}
+    mean_metrics = {
+        (f"mean_{key}" if len(group_names) == 1 else f"mean_{group}_{key}"): value
+        for group, values in group_means.items()
+        for key, value in zip(column_names, values)
+    }
     return mean_metrics

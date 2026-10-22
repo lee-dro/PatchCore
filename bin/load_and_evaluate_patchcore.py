@@ -170,7 +170,9 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
                 if key != "dataset_name":
                     LOGGER.info("{0}: {1:3.3f}".format(key, item))
 
-            del PatchCore_list
+            # One loaded model may intentionally serve several evaluation loaders.
+            if n_patchcores != 1 or dataloader_count == n_dataloaders - 1:
+                del PatchCore_list
             gc.collect()
 
         LOGGER.info("\n\n-----\n")
