@@ -1,0 +1,2 @@
+"""Interactive PatchCore demo package."""
+

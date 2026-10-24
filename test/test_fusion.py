@@ -226,58 +226,16 @@ def test_bad_weights(weights):
         normalize_weights(weights, 2)
 
 
-def test_launch_cli_constructs_independent_layer_branches(monkeypatch, tmp_path):
-    run = load_script("run_patchcore")
+def test_launch_config_targets_the_streamlit_demo():
     config = json.loads(
         (Path(__file__).resolve().parents[1] / ".vscode/launch.json").read_text()
     )
     assert len(config["configurations"]) == 1
-    args = list(config["configurations"][0]["args"])
-    assert args.count("-b") == 2
-    assert args[args.index("-b") + 1] == "wideresnet50"
-    assert args.count("-le") == 2
-    assert args[args.index("-le") + 1] == "0.layer2"
-    assert args[args.index("-le", args.index("-le") + 1) + 1] == "1.layer3"
-    assert args.count("-d") == 1
-    assert "--layer_fusion_weight" not in args
-    assert "--task_decoupled_ablation" in args
-    args[-1] = str(tmp_path)
-    args[args.index("--anomaly_scorer_num_nn") + 1] = "3"
-    captured = {}
-
-    class Backbone:
-        pass
-
-    class Model:
-        def __init__(self, device):
-            pass
-
-        def load(self, **kwargs):
-            self.configuration = kwargs
-
-    monkeypatch.setattr(run.patchcore.backbones, "load", lambda name: Backbone())
-    monkeypatch.setattr(run.patchcore.patchcore, "PatchCore", Model)
-    monkeypatch.setattr(run.patchcore.common, "FaissNN", lambda *args: object())
-
-    def callback(methods, **kwargs):
-        captured["models"] = dict(methods)["get_patchcore"](
-            (3, 224, 224), object(), "cpu"
-        )
-
-    run.main.result_callback(replace=True)(callback)
-    # Exercise the actual launch argument chain, without reading the dataset.
-    result = CliRunner().invoke(run.main, args)
-    assert result.exit_code == 0, result.output
-    models = captured["models"]
-    assert len(models) == 2
-    assert [list(m.configuration["layers_to_extract_from"]) for m in models] == [
-        ["layer2"],
-        ["layer3"],
-    ]
-    assert all(m.configuration["layer_fusion_weights"] is None for m in models)
-    np.testing.assert_allclose([m.image_fusion_weight for m in models], [0.9, 0.1])
-    np.testing.assert_allclose([m.pixel_fusion_weight for m in models], [0.5, 0.5])
-    assert all(model.configuration["anomaly_score_num_nn"] == 3 for model in models)
+    launch = config["configurations"][0]
+    assert launch["name"] == "PatchCore Demo - Streamlit"
+    assert launch["module"] == "streamlit"
+    assert launch["args"][:2] == ["run", "${workspaceFolder}/demo/app.py"]
+    assert launch["env"]["PYTHONPATH"] == "${workspaceFolder}/src"
 
 
 @pytest.mark.parametrize(

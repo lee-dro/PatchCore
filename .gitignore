@@ -2,7 +2,10 @@
 __pycache__/
 LabletAnomaly.egg-info/
 .pytest_cache/
+# Demo automatically generated per-model calibration cache.
+**/threshold*.json
 results/**/run.log
 results/**/models/
+results/**/demo/
 results/**/segmentation_images/
 results/**/*.inspect.ndjson
